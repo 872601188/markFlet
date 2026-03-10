@@ -13,7 +13,9 @@
 - 📝 **Markdown 编辑** - 支持实时预览的 Markdown 编辑器
 - 👁️ **实时预览** - 左右分栏，编辑与预览同步
 - 📂 **文件操作** - 打开、保存 Markdown 文件
-- 📄 **Word 导出** - 一键将 Markdown 转换为 Word 文档
+- 📄 **Word 导出** - 支持图片、表格、代码块、链接等元素
+- 🌐 **HTML 导出** - 导出带样式的 HTML 文件
+- 📄 **PDF 导出** - 支持图片和格式化的 PDF 导出
 - 🎨 **主题切换** - 支持亮色/暗色主题
 - 💾 **SQLite 存储** - 保存最近打开的文件历史
 - 🖼️ **图片粘贴支持** - 从剪贴板粘贴图片并自动保存
@@ -68,6 +70,8 @@ python main.py
 | python-docx | >=1.1.0 | Word 文档生成 |
 | pymdown-extensions | >=10.0 | Markdown 扩展 |
 | Pillow | >=10.0.0 | 图片处理 |
+| beautifulsoup4 | >=4.12.0 | HTML 解析 |
+| weasyprint | >=60.0 | PDF 导出（可选）|
 
 ---
 
@@ -76,7 +80,9 @@ python main.py
 - [x] 基础 Markdown 编辑器
 - [x] 实时预览功能
 - [x] 文件打开/保存
-- [x] Word 导出
+- [x] Word 导出（改进版）
+- [x] HTML 导出
+- [x] PDF 导出
 - [x] SQLite 历史记录
 - [x] 图片粘贴支持
 - [ ] 数学公式渲染

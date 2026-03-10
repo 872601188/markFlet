@@ -3,12 +3,27 @@ import markdown
 import sqlite3
 import os
 import io
+import re
 from datetime import datetime
 from pathlib import Path
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from PIL import ImageGrab, Image
+from bs4 import BeautifulSoup
+
+# 可选依赖：PDF 导出
+try:
+    from weasyprint import HTML as WeasyHTML
+    WEASYPRINT_AVAILABLE = True
+except ImportError:
+    WEASYPRINT_AVAILABLE = False
+
+try:
+    import pdfkit
+    PDFKIT_AVAILABLE = True
+except ImportError:
+    PDFKIT_AVAILABLE = False
 
 
 class Database:
@@ -78,112 +93,420 @@ class MarkdownConverter:
         )
     
     @staticmethod
-    def md_to_docx(md_text, output_path):
-        """将 Markdown 转换为 Word 文档"""
+    def _parse_inline_formatting(paragraph, text):
+        """解析行内格式（粗体、斜体、行内代码、链接）"""
+        # 处理链接 [text](url)
+        link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
+        parts = re.split(link_pattern, text)
+        
+        i = 0
+        while i < len(parts):
+            if i + 2 < len(parts) and parts[i+1] is not None:
+                # 这是链接部分
+                link_text = parts[i]
+                link_url = parts[i+1]
+                run = paragraph.add_run(link_text)
+                run.font.underline = True
+                run.font.color.rgb = RGBColor(0, 0, 255)
+                i += 3
+            else:
+                # 普通文本，处理格式
+                MarkdownConverter._parse_formatting(paragraph, parts[i])
+                i += 1
+    
+    @staticmethod
+    def _parse_formatting(paragraph, text):
+        """解析粗体、斜体、行内代码"""
+        if not text:
+            return
+            
+        # 处理粗体 **text**
+        bold_parts = text.split('**')
+        for idx, part in enumerate(bold_parts):
+            if idx % 2 == 1:  # 粗体部分
+                run = paragraph.add_run(part)
+                run.bold = True
+            else:
+                # 处理斜体 *text*
+                italic_parts = part.split('*')
+                for sub_idx, sub_part in enumerate(italic_parts):
+                    if sub_idx % 2 == 1:  # 斜体部分
+                        run = paragraph.add_run(sub_part)
+                        run.italic = True
+                    else:
+                        # 处理行内代码 `code`
+                        code_parts = sub_part.split('`')
+                        for code_idx, code_part in enumerate(code_parts):
+                            if code_idx % 2 == 1:  # 代码部分
+                                run = paragraph.add_run(code_part)
+                                run.font.name = 'Courier New'
+                                run.font.size = Pt(10)
+                                run.font.color.rgb = RGBColor(128, 128, 128)
+                            else:
+                                if code_part:
+                                    paragraph.add_run(code_part)
+    
+    @staticmethod
+    def md_to_docx(md_text, output_path, base_dir=None):
+        """
+        将 Markdown 转换为 Word 文档（使用 HTML 中间表示实现更精确的转换）
+        """
         doc = Document()
         
-        # 解析 Markdown
-        lines = md_text.split('\n')
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            
-            if not line:
-                i += 1
-                continue
-            
-            # 处理标题
-            if line.startswith('# '):
-                p = doc.add_heading(line[2:], level=1)
-                i += 1
-            elif line.startswith('## '):
-                p = doc.add_heading(line[3:], level=2)
-                i += 1
-            elif line.startswith('### '):
-                p = doc.add_heading(line[4:], level=3)
-                i += 1
-            elif line.startswith('#### '):
-                p = doc.add_heading(line[5:], level=4)
-                i += 1
-            
-            # 处理代码块
-            elif line.startswith('```'):
-                code_lines = []
-                i += 1
-                while i < len(lines) and not lines[i].strip().startswith('```'):
-                    code_lines.append(lines[i])
-                    i += 1
-                i += 1  # 跳过结束标记
+        # 将 Markdown 转换为 HTML
+        html_content = markdown.markdown(
+            md_text,
+            extensions=[
+                'pymdownx.extra',
+                'pymdownx.highlight',
+                'pymdownx.superfences',
+                'tables',
+                'fenced_code',
+                'toc'
+            ]
+        )
+        
+        # 使用 BeautifulSoup 解析 HTML
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # 遍历所有顶级元素
+        for element in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'ul', 'ol', 'blockquote', 'table', 'img']):
+            if element.name == 'h1':
+                doc.add_heading(element.get_text(), level=1)
+            elif element.name == 'h2':
+                doc.add_heading(element.get_text(), level=2)
+            elif element.name == 'h3':
+                doc.add_heading(element.get_text(), level=3)
+            elif element.name == 'h4':
+                doc.add_heading(element.get_text(), level=4)
+            elif element.name == 'h5':
+                doc.add_heading(element.get_text(), level=5)
+            elif element.name == 'h6':
+                doc.add_heading(element.get_text(), level=6)
                 
-                if code_lines:
+            elif element.name == 'p':
+                p = doc.add_paragraph()
+                MarkdownConverter._parse_inline_elements(p, element, base_dir)
+                
+            elif element.name == 'pre':
+                # 代码块
+                code = element.find('code')
+                if code:
+                    # 获取语言类型（如果有）
+                    classes = code.get('class', [])
+                    lang = ''
+                    for cls in classes:
+                        if cls.startswith('language-'):
+                            lang = cls.replace('language-', '')
+                            break
+                    
+                    code_text = code.get_text()
                     p = doc.add_paragraph()
-                    run = p.add_run('\n'.join(code_lines))
+                    if lang:
+                        p.add_run(f'📝 {lang}\n').italic = True
+                    run = p.add_run(code_text)
                     run.font.name = 'Courier New'
                     run.font.size = Pt(10)
                     p.paragraph_format.left_indent = Inches(0.5)
-            
-            # 处理列表
-            elif line.startswith('- ') or line.startswith('* '):
-                items = []
-                while i < len(lines) and (lines[i].strip().startswith('- ') or lines[i].strip().startswith('* ')):
-                    items.append(lines[i].strip()[2:])
-                    i += 1
-                for item in items:
-                    p = doc.add_paragraph(item, style='List Bullet')
-            
-            # 处理有序列表
-            elif line[0:2].replace('.', '').isdigit():
-                items = []
-                while i < len(lines) and lines[i].strip() and lines[i].strip()[0:2].replace('.', '').isdigit():
-                    item_text = lines[i].strip()
-                    if '. ' in item_text:
-                        items.append(item_text.split('. ', 1)[1])
-                    i += 1
-                for item in items:
-                    p = doc.add_paragraph(item, style='List Number')
-            
-            # 处理引用
-            elif line.startswith('> '):
-                quote_lines = []
-                while i < len(lines) and lines[i].strip().startswith('> '):
-                    quote_lines.append(lines[i].strip()[2:])
-                    i += 1
-                p = doc.add_paragraph(' '.join(quote_lines))
+                    p.paragraph_format.shading.background_pattern = True
+                    
+            elif element.name == 'ul':
+                # 无序列表
+                for li in element.find_all('li', recursive=False):
+                    p = doc.add_paragraph(style='List Bullet')
+                    MarkdownConverter._parse_inline_elements(p, li, base_dir)
+                    
+            elif element.name == 'ol':
+                # 有序列表
+                for li in element.find_all('li', recursive=False):
+                    p = doc.add_paragraph(style='List Number')
+                    MarkdownConverter._parse_inline_elements(p, li, base_dir)
+                    
+            elif element.name == 'blockquote':
+                # 引用块
+                p = doc.add_paragraph()
                 p.paragraph_format.left_indent = Inches(0.5)
                 p.paragraph_format.right_indent = Inches(0.5)
-                run = p.runs[0] if p.runs else p.add_run()
-                run.italic = True
-            
-            # 处理普通段落（支持粗体、斜体、行内代码）
-            else:
-                p = doc.add_paragraph()
                 
-                # 处理粗体和斜体
-                parts = line.split('**')
-                for idx, part in enumerate(parts):
-                    if idx % 2 == 1:  # 粗体部分
-                        p.add_run(part).bold = True
-                    else:
-                        # 处理斜体
-                        sub_parts = part.split('*')
-                        for sub_idx, sub_part in enumerate(sub_parts):
-                            if sub_idx % 2 == 1:  # 斜体部分
-                                p.add_run(sub_part).italic = True
-                            else:
-                                # 处理行内代码
-                                code_parts = sub_part.split('`')
-                                for code_idx, code_part in enumerate(code_parts):
-                                    if code_idx % 2 == 1:  # 代码部分
-                                        run = p.add_run(code_part)
-                                        run.font.name = 'Courier New'
-                                        run.font.size = Pt(10)
-                                    else:
-                                        if code_part:
-                                            p.add_run(code_part)
-                i += 1
+                # 处理嵌套元素
+                for child in element.children:
+                    if child.name == 'p':
+                        MarkdownConverter._parse_inline_elements(p, child, base_dir)
+                    elif child.name:
+                        p.add_run(child.get_text())
+                        
+            elif element.name == 'table':
+                # 表格
+                rows = element.find_all('tr')
+                if rows:
+                    # 获取列数
+                    first_row = rows[0]
+                    col_count = len(first_row.find_all(['th', 'td']))
+                    
+                    if col_count > 0:
+                        table = doc.add_table(rows=len(rows), cols=col_count)
+                        table.style = 'Light Grid Accent 1'
+                        
+                        for row_idx, row in enumerate(rows):
+                            cells = row.find_all(['th', 'td'])
+                            for col_idx, cell in enumerate(cells):
+                                if col_idx < col_count:
+                                    table.rows[row_idx].cells[col_idx].text = cell.get_text()
+                                    # 标题行加粗
+                                    if row_idx == 0 and cell.name == 'th':
+                                        for para in table.rows[row_idx].cells[col_idx].paragraphs:
+                                            for run in para.runs:
+                                                run.bold = True
+                                        
+            elif element.name == 'img':
+                # 图片
+                src = element.get('src', '')
+                alt = element.get('alt', '')
+                if src:
+                    try:
+                        # 处理相对路径
+                        if base_dir and not src.startswith(('http://', 'https://', 'file://', 'data:')):
+                            if src.startswith('file://'):
+                                src = src[7:]
+                            img_path = os.path.normpath(os.path.join(base_dir, src))
+                        else:
+                            img_path = src
+                            
+                        if os.path.exists(img_path):
+                            doc.add_picture(img_path, width=Inches(5.0))
+                            # 添加图片说明
+                            if alt:
+                                p = doc.add_paragraph(alt)
+                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                                p.runs[0].italic = True
+                                p.runs[0].font.size = Pt(9)
+                    except Exception as e:
+                        # 如果图片加载失败，添加占位文本
+                        p = doc.add_paragraph(f'[图片: {alt or src}]')
+                        p.italic = True
         
         doc.save(output_path)
         return True
+    
+    @staticmethod
+    def _parse_inline_elements(paragraph, element, base_dir=None):
+        """解析行内元素"""
+        for child in element.children:
+            if child.name == 'strong' or child.name == 'b':
+                run = paragraph.add_run(child.get_text())
+                run.bold = True
+            elif child.name == 'em' or child.name == 'i':
+                run = paragraph.add_run(child.get_text())
+                run.italic = True
+            elif child.name == 'code':
+                run = paragraph.add_run(child.get_text())
+                run.font.name = 'Courier New'
+                run.font.size = Pt(10)
+                run.font.color.rgb = RGBColor(128, 128, 128)
+            elif child.name == 'a':
+                run = paragraph.add_run(child.get_text())
+                run.font.underline = True
+                run.font.color.rgb = RGBColor(0, 0, 255)
+            elif child.name == 'br':
+                paragraph.add_run('\n')
+            elif child.name is None:
+                # 纯文本
+                if child.string:
+                    paragraph.add_run(child.string)
+            elif child.name:
+                # 递归处理嵌套元素
+                MarkdownConverter._parse_inline_elements(paragraph, child, base_dir)
+    
+    @staticmethod
+    def md_to_html(md_text, output_path):
+        """将 Markdown 转换为 HTML 文件"""
+        # 转换为 HTML
+        html_body = markdown.markdown(
+            md_text,
+            extensions=[
+                'pymdownx.extra',
+                'pymdownx.highlight',
+                'pymdownx.superfences',
+                'tables',
+                'fenced_code',
+                'toc',
+                'meta'
+            ]
+        )
+        
+        # 构建完整的 HTML 文档
+        html_template = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>markFlet 导出文档</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+            line-height: 1.6;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+        }}
+        h1, h2, h3, h4, h5, h6 {{
+            margin-top: 24px;
+            margin-bottom: 16px;
+            font-weight: 600;
+            line-height: 1.25;
+        }}
+        h1 {{ font-size: 2em; border-bottom: 1px solid #eaecef; padding-bottom: 0.3em; }}
+        h2 {{ font-size: 1.5em; border-bottom: 1px solid #eaecef; padding-bottom: 0.3em; }}
+        h3 {{ font-size: 1.25em; }}
+        code {{
+            background-color: #f6f8fa;
+            padding: 0.2em 0.4em;
+            border-radius: 3px;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 85%;
+        }}
+        pre {{
+            background-color: #f6f8fa;
+            padding: 16px;
+            overflow: auto;
+            border-radius: 6px;
+            line-height: 1.45;
+        }}
+        pre code {{
+            background-color: transparent;
+            padding: 0;
+        }}
+        blockquote {{
+            border-left: 4px solid #dfe2e5;
+            padding-left: 16px;
+            margin-left: 0;
+            color: #6a737d;
+        }}
+        table {{
+            border-collapse: collapse;
+            width: 100%;
+            margin: 16px 0;
+        }}
+        th, td {{
+            border: 1px solid #dfe2e5;
+            padding: 6px 13px;
+        }}
+        th {{
+            background-color: #f6f8fa;
+            font-weight: 600;
+        }}
+        tr:nth-child(2n) {{
+            background-color: #f6f8fa;
+        }}
+        img {{
+            max-width: 100%;
+            height: auto;
+        }}
+        a {{
+            color: #0366d6;
+            text-decoration: none;
+        }}
+        a:hover {{
+            text-decoration: underline;
+        }}
+        ul, ol {{
+            padding-left: 2em;
+        }}
+        li + li {{
+            margin-top: 0.25em;
+        }}
+    </style>
+</head>
+<body>
+{html_body}
+</body>
+</html>"""
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(html_template)
+        return True
+    
+    @staticmethod
+    def md_to_pdf(md_text, output_path, base_dir=None):
+        """将 Markdown 转换为 PDF 文档"""
+        # 首先生成 HTML
+        html_content = markdown.markdown(
+            md_text,
+            extensions=[
+                'pymdownx.extra',
+                'pymdownx.highlight',
+                'pymdownx.superfences',
+                'tables',
+                'fenced_code',
+                'toc'
+            ]
+        )
+        
+        # 构建完整 HTML 文档
+        html_template = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{
+            font-family: "Microsoft YaHei", "SimHei", sans-serif;
+            line-height: 1.6;
+            padding: 20px;
+        }}
+        h1, h2, h3, h4, h5, h6 {{
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }}
+        code {{
+            background-color: #f5f5f5;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-family: Consolas, monospace;
+        }}
+        pre {{
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }}
+        blockquote {{
+            border-left: 3px solid #ccc;
+            padding-left: 15px;
+            margin-left: 0;
+            color: #666;
+        }}
+        table {{
+            border-collapse: collapse;
+            width: 100%;
+            margin: 15px 0;
+        }}
+        th, td {{
+            border: 1px solid #ddd;
+            padding: 8px;
+        }}
+        th {{
+            background-color: #f5f5f5;
+        }}
+        img {{
+            max-width: 100%;
+        }}
+    </style>
+</head>
+<body>
+{html_content}
+</body>
+</html>"""
+        
+        # 使用 weasyprint 或 pdfkit 转换为 PDF
+        if WEASYPRINT_AVAILABLE:
+            WeasyHTML(string=html_template).write_pdf(output_path)
+            return True
+        elif PDFKIT_AVAILABLE:
+            pdfkit.from_string(html_template, output_path)
+            return True
+        else:
+            raise ImportError("未找到 PDF 库，请安装 weasyprint 或 pdfkit")
 
 
 def main(page: ft.Page):
@@ -369,10 +692,50 @@ def main(page: ft.Page):
             if not file_path.endswith('.docx'):
                 file_path += '.docx'
             try:
-                converter.md_to_docx(editor.value or "", file_path)
+                base_dir = os.path.dirname(current_file) if current_file else None
+                converter.md_to_docx(editor.value or "", file_path, base_dir)
                 status_text.value = f"已导出: {file_path}"
                 show_snack("Word 文档已导出")
                 page.update()
+            except Exception as ex:
+                show_snack(f"导出失败: {str(ex)}")
+    
+    async def export_html(e):
+        """导出 HTML"""
+        file_path = await save_file_dialog.save_file(
+            dialog_title="导出 HTML 文件",
+            file_name="document.html",
+            allowed_extensions=["html"]
+        )
+        if file_path:
+            if not file_path.endswith('.html'):
+                file_path += '.html'
+            try:
+                converter.md_to_html(editor.value or "", file_path)
+                status_text.value = f"已导出: {file_path}"
+                show_snack("HTML 文件已导出")
+                page.update()
+            except Exception as ex:
+                show_snack(f"导出失败: {str(ex)}")
+    
+    async def export_pdf(e):
+        """导出 PDF"""
+        file_path = await save_file_dialog.save_file(
+            dialog_title="导出 PDF 文档",
+            file_name="document.pdf",
+            allowed_extensions=["pdf"]
+        )
+        if file_path:
+            if not file_path.endswith('.pdf'):
+                file_path += '.pdf'
+            try:
+                base_dir = os.path.dirname(current_file) if current_file else None
+                converter.md_to_pdf(editor.value or "", file_path, base_dir)
+                status_text.value = f"已导出: {file_path}"
+                show_snack("PDF 文档已导出")
+                page.update()
+            except ImportError:
+                show_snack("请先安装 PDF 库: pip install weasyprint 或 pip install pdfkit")
             except Exception as ex:
                 show_snack(f"导出失败: {str(ex)}")
     
@@ -495,6 +858,8 @@ def main(page: ft.Page):
             ft.ElevatedButton("另存为", icon=ft.Icons.SAVE_AS, on_click=save_as_file),
             ft.VerticalDivider(width=10),
             ft.ElevatedButton("导出 Word", icon=ft.Icons.DESCRIPTION, on_click=export_word),
+            ft.ElevatedButton("导出 HTML", icon=ft.Icons.CODE, on_click=export_html),
+            ft.ElevatedButton("导出 PDF", icon=ft.Icons.PICTURE_AS_PDF, on_click=export_pdf),
             ft.VerticalDivider(width=10),
             ft.ElevatedButton("粘贴图片", icon=ft.Icons.IMAGE, on_click=paste_image_from_clipboard, tooltip="从剪贴板粘贴图片 (Ctrl+Shift+V)"),
             ft.VerticalDivider(width=10),
@@ -578,7 +943,9 @@ def main(page: ft.Page):
 
 - 📝 Markdown 编辑
 - 👁️ 实时预览
-- 📄 Word 导出
+- 📄 Word 导出（支持图片、表格、代码块）
+- 🌐 HTML 导出
+- 📑 PDF 导出
 - 🎨 主题切换
 - 🖼️️ 图片粘贴支持
 
