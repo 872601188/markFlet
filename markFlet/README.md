@@ -16,6 +16,7 @@
 - 📄 **Word 导出** - 一键将 Markdown 转换为 Word 文档
 - 🎨 **主题切换** - 支持亮色/暗色主题
 - 💾 **SQLite 存储** - 保存最近打开的文件历史
+- 🖼️ **图片粘贴支持** - 从剪贴板粘贴图片并自动保存
 
 ---
 
@@ -66,6 +67,7 @@ python main.py
 | markdown | >=3.5.0 | Markdown 解析 |
 | python-docx | >=1.1.0 | Word 文档生成 |
 | pymdown-extensions | >=10.0 | Markdown 扩展 |
+| Pillow | >=10.0.0 | 图片处理 |
 
 ---
 
@@ -76,7 +78,7 @@ python main.py
 - [x] 文件打开/保存
 - [x] Word 导出
 - [x] SQLite 历史记录
-- [ ] 图片粘贴支持
+- [x] 图片粘贴支持
 - [ ] 数学公式渲染
 - [ ] 代码高亮优化
 - [ ] 多标签页支持

@@ -2,11 +2,13 @@ import flet as ft
 import markdown
 import sqlite3
 import os
+import io
 from datetime import datetime
 from pathlib import Path
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from PIL import ImageGrab, Image
 
 
 class Database:
@@ -204,6 +206,9 @@ def main(page: ft.Page):
     # Markdown 转换器
     converter = MarkdownConverter()
     
+    # 图片保存目录
+    images_dir = None
+    
     # 创建 UI 组件
     # 编辑区
     editor = ft.TextField(
@@ -303,8 +308,10 @@ def main(page: ft.Page):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read()
                 editor.value = content
-                nonlocal current_file
+                nonlocal current_file, images_dir
                 current_file = file_path
+                # 重置图片目录
+                images_dir = None
                 update_preview()
                 db.add_recent_file(file_path)
                 page.title = f"markFlet - {os.path.basename(file_path)}"
@@ -386,10 +393,98 @@ def main(page: ft.Page):
         nonlocal current_file
         editor.value = ""
         current_file = None
+        images_dir = None
         page.title = "markFlet - 未命名"
         update_preview()
         status_text.value = "新建文件"
         page.update()
+    
+    def get_images_directory():
+        """获取图片保存目录"""
+        nonlocal images_dir
+        if images_dir:
+            return images_dir
+        if current_file:
+            # 如果有当前文件，在其所在目录创建 images 子目录
+            base_dir = os.path.dirname(current_file)
+            img_dir = os.path.join(base_dir, "images")
+        else:
+            # 否则使用临时目录
+            img_dir = os.path.join(os.path.expanduser("~"), "markFlet_images")
+        
+        if not os.path.exists(img_dir):
+            os.makedirs(img_dir)
+        images_dir = img_dir
+        return img_dir
+    
+    def paste_image_from_clipboard(e=None):
+        """从剪贴板粘贴图片"""
+        try:
+            # 尝试从剪贴板获取图片
+            img = ImageGrab.grabclipboard()
+            
+            if img is None:
+                show_snack("剪贴板中没有图片")
+                return False
+            
+            if not isinstance(img, Image.Image):
+                show_snack("剪贴板内容不是图片")
+                return False
+            
+            # 生成图片文件名
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            img_filename = f"image_{timestamp}.png"
+            img_dir = get_images_directory()
+            img_path = os.path.join(img_dir, img_filename)
+            
+            # 保存图片
+            img.save(img_path, "PNG")
+            
+            # 计算相对路径（相对于当前文件）
+            if current_file:
+                base_dir = os.path.dirname(current_file)
+                rel_path = os.path.relpath(img_path, base_dir).replace("\\", "/")
+            else:
+                rel_path = img_path.replace("\\", "/")
+            
+            # 在编辑器当前光标位置插入 Markdown 图片语法
+            cursor_pos = editor.selection.start if editor.selection else len(editor.value or "")
+            current_text = editor.value or ""
+            
+            # 构建 Markdown 图片语法
+            img_markdown = f"![图片]({rel_path})"
+            
+            # 在光标位置插入
+            new_text = current_text[:cursor_pos] + img_markdown + current_text[cursor_pos:]
+            editor.value = new_text
+            
+            # 更新预览
+            update_preview()
+            
+            status_text.value = f"图片已保存: {img_filename}"
+            show_snack(f"图片已粘贴并保存到: {rel_path}")
+            page.update()
+            return True
+            
+        except Exception as ex:
+            show_snack(f"粘贴图片失败: {str(ex)}")
+            return False
+    
+    def on_editor_paste(e):
+        """处理编辑器粘贴事件"""
+        # 延迟执行，让文本粘贴先完成
+        def check_and_paste_image():
+            try:
+                img = ImageGrab.grabclipboard()
+                if img is not None and isinstance(img, Image.Image):
+                    # 如果剪贴板中有图片，处理图片粘贴
+                    paste_image_from_clipboard()
+            except:
+                pass
+        
+        # 使用 page.run_thread 延迟检查剪贴板
+        import threading
+        threading.Timer(0.1, check_and_paste_image).start()
     
     # 工具栏
     toolbar = ft.Row(
@@ -400,6 +495,8 @@ def main(page: ft.Page):
             ft.ElevatedButton("另存为", icon=ft.Icons.SAVE_AS, on_click=save_as_file),
             ft.VerticalDivider(width=10),
             ft.ElevatedButton("导出 Word", icon=ft.Icons.DESCRIPTION, on_click=export_word),
+            ft.VerticalDivider(width=10),
+            ft.ElevatedButton("粘贴图片", icon=ft.Icons.IMAGE, on_click=paste_image_from_clipboard, tooltip="从剪贴板粘贴图片 (Ctrl+Shift+V)"),
             ft.VerticalDivider(width=10),
             ft.IconButton(
                 icon=ft.Icons.DARK_MODE if page.theme_mode == ft.ThemeMode.LIGHT else ft.Icons.LIGHT_MODE,
@@ -483,6 +580,7 @@ def main(page: ft.Page):
 - 👁️ 实时预览
 - 📄 Word 导出
 - 🎨 主题切换
+- 🖼️️ 图片粘贴支持
 
 ## 开始使用
 
@@ -490,13 +588,17 @@ def main(page: ft.Page):
 2. 在左侧编辑，右侧实时预览
 3. 点击"导出 Word"生成 Word 文档
 
+## 图片粘贴
+
+点击工具栏的"粘贴图片"按钮，或复制图片后点击按钮，即可将图片插入到文档中。
+
 ## 代码示例
 
 ```python
 print("Hello, markFlet!")
 ```
 
-> 💡 **提示**：支持标准 Markdown 语法，包括标题、列表、代码块、引用等。
+> 💡 **提示**：支持标准 Markdown 语法，包括标题、列表、代码块、引用、图片等。
 """
     update_preview()
 
