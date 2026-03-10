@@ -39,8 +39,8 @@ def build_exe():
         # 添加数据文件
         '--add-data=markflet.db;.',
         
-        # 图标（如果有的话）
-        # '--icon=assets/icon.ico',
+        # 图标
+        '--icon=assets/icon.ico',
         
         # 主程序入口
         'markFlet/main.py'
