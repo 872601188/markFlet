@@ -24,20 +24,23 @@ def build_exe():
         # 隐藏控制台（Windows）
         '--hide-console=hide-early',
         
+        # Flet 需要的隐藏导入
+        '--hidden-import=flet_desktop',
+        '--hidden-import=flet_desktop.app',
+        '--hidden-import=flet_desktop.view',
+        '--hidden-import=flet_core',
+        '--hidden-import=flet_core.embedded_javascript',
+        
+        # 添加 Flet 桌面运行时
+        '--collect-all=flet_desktop',
+        '--collect-all=flet_core',
+        '--collect-all=flet',
+        
         # 添加数据文件
         '--add-data=markflet.db;.',
         
         # 图标（如果有的话）
         # '--icon=assets/icon.ico',
-        
-        # 排除不必要的模块以减小体积
-        '--exclude-module=matplotlib',
-        '--exclude-module=numpy',
-        '--exclude-module=pandas',
-        '--exclude-module=scipy',
-        '--exclude-module=tkinter',
-        '--exclude-module=unittest',
-        '--exclude-module=pytest',
         
         # 主程序入口
         'markFlet/main.py'
