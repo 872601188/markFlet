@@ -915,10 +915,15 @@ def main(page: ft.Page):
                             content=ft.Column(
                                 [
                                     ft.Text("预览", weight=ft.FontWeight.BOLD, size=12, font_family="Microsoft YaHei"),
-                                    preview
+                                    ft.Container(
+                                        content=preview,
+                                        expand=True,
+                                        clip_behavior=ft.ClipBehavior.ANTI_ALIAS
+                                    )
                                 ],
                                 expand=True,
-                                spacing=0,
+                                spacing=5,
+                                scroll=ft.ScrollMode.AUTO,
                                 ref=preview_column_ref
                             ),
                             expand=True,
