@@ -1,0 +1,5 @@
+flet>=0.20.0
+markdown>=3.5.0
+python-docx>=1.1.0
+pymdown-extensions>=10.0
+beautifulsoup4>=4.12.0
