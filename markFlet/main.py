@@ -546,12 +546,19 @@ def main(page: ft.Page):
         on_change=lambda e: update_preview()
     )
     
-    # 预览区
-    preview = ft.Markdown(
+    # 预览区 - 使用 Container 包裹确保正确展开
+    preview_content = ft.Markdown(
         selectable=True,
         expand=True,
         extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
         on_tap_link=lambda e: page.launch_url(e.data)
+    )
+    
+    # 将 Markdown 包裹在 Container 中，确保占满空间
+    preview = ft.Container(
+        content=preview_content,
+        expand=True,
+        padding=15,
     )
     
     # 状态栏
@@ -602,7 +609,7 @@ def main(page: ft.Page):
                 # 替换 Markdown 图片语法中的路径
                 md_text = re.sub(r'!\[(.*?)\]\((.*?)\)', replace_image_path, md_text)
             
-            preview.value = md_text
+            preview_content.value = md_text
             page.update()
         except Exception as e:
             status_text.value = f"预览更新失败: {str(e)}"
@@ -911,7 +918,7 @@ def main(page: ft.Page):
                                     preview
                                 ],
                                 expand=True,
-                                scroll=ft.ScrollMode.AUTO,
+                                spacing=0,
                                 ref=preview_column_ref
                             ),
                             expand=True,
